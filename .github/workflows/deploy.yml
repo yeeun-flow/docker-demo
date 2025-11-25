@@ -10,7 +10,7 @@ on:
       - main
 
 env:
-  AWS_REGION: ${{ vars.AWS_REGION || 'us-east-2' }}
+  AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}  # GitHub Variables에서 가져오기 (기본값: us-east-1)
 
 jobs:
   build-and-push:
@@ -21,13 +21,64 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Validate AWS credentials
+        run: |
+          if [ -z "${{ secrets.AWS_ACCESS_KEY_ID }}" ]; then
+            echo "❌ AWS_ACCESS_KEY_ID is not set"
+            exit 1
+          fi
+          if [ -z "${{ secrets.AWS_SECRET_ACCESS_KEY }}" ]; then
+            echo "❌ AWS_SECRET_ACCESS_KEY is not set"
+            exit 1
+          fi
+          if [ -z "${{ secrets.AWS_SESSION_TOKEN }}" ]; then
+            echo "⚠️  AWS_SESSION_TOKEN is not set (required for temporary credentials)"
+            exit 1
+          fi
+          echo "✅ AWS credentials are set"
+
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}  # 임시 자격 증명용 (선택사항)
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
           aws-region: ${{ env.AWS_REGION }}
+
+      - name: Debug AWS credentials
+        run: |
+          echo "🔍 AWS 자격 증명 확인 중..."
+          echo ""
+          echo "현재 IAM 역할:"
+          aws sts get-caller-identity || echo "❌ 자격 증명 확인 실패"
+          echo ""
+          echo "Access Key ID 시작: ${{ secrets.AWS_ACCESS_KEY_ID }}"
+          echo "Session Token 길이: $(echo -n '${{ secrets.AWS_SESSION_TOKEN }}' | wc -c) 문자"
+          echo ""
+          echo "리전: ${{ env.AWS_REGION }}"
+
+      - name: Check ECR permissions
+        run: |
+          echo "🔍 Checking ECR permissions..."
+          if aws ecr get-authorization-token --region ${{ env.AWS_REGION }} 2>&1 | grep -q "not authorized"; then
+            echo "❌ ECR 권한이 없습니다!"
+            echo ""
+            echo "현재 IAM 역할: $(aws sts get-caller-identity --query Arn --output text)"
+            echo ""
+            echo "해결 방법:"
+            echo "1. Cloud Labs에서 ECR 권한이 있는 세션을 시작하세요"
+            echo "2. 또는 AWS Console에서 IAM 역할에 다음 권한을 추가하세요:"
+            echo "   - ecr:GetAuthorizationToken"
+            echo "   - ecr:BatchCheckLayerAvailability"
+            echo "   - ecr:GetDownloadUrlForLayer"
+            echo "   - ecr:BatchGetImage"
+            echo "   - ecr:PutImage"
+            echo "   - ecr:InitiateLayerUpload"
+            echo "   - ecr:UploadLayerPart"
+            echo "   - ecr:CompleteLayerUpload"
+            exit 1
+          fi
+          echo "✅ ECR 권한 확인 완료"
 
       - name: Login to Amazon ECR
         id: login-ecr
