@@ -1,0 +1,104 @@
+name: Build and Push to ECR
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+  pull_request:
+    branches:
+      - main
+
+env:
+  AWS_REGION: ap-northeast-2  # 서울 리전 (필요시 변경)
+
+jobs:
+  build-and-push:
+    name: Build and Push Docker Image to ECR
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Extract metadata for Docker
+        id: meta
+        run: |
+          BRANCH_NAME=${GITHUB_REF#refs/heads/}
+          SHORT_SHA=$(echo $GITHUB_SHA | cut -c1-7)
+          TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+          
+          echo "branch=${BRANCH_NAME}" >> $GITHUB_OUTPUT
+          echo "sha=${SHORT_SHA}" >> $GITHUB_OUTPUT
+          echo "timestamp=${TIMESTAMP}" >> $GITHUB_OUTPUT
+          
+          # 이미지 태그 생성
+          if [ "$BRANCH_NAME" = "main" ]; then
+            echo "tags=latest,${SHORT_SHA},${TIMESTAMP}" >> $GITHUB_OUTPUT
+          else
+            echo "tags=${BRANCH_NAME}-${SHORT_SHA},${BRANCH_NAME}-${TIMESTAMP}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Build and push Docker image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY_NAME }}
+          IMAGE_TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          # 태그들을 배열로 변환
+          IFS=',' read -ra TAGS <<< "$IMAGE_TAGS"
+          
+          # 첫 번째 태그로 이미지 빌드
+          FIRST_TAG="${ECR_REGISTRY}/${ECR_REPOSITORY}:${TAGS[0]}"
+          echo "Building image: $FIRST_TAG"
+          
+          docker buildx build \
+            --platform linux/amd64 \
+            --tag "$FIRST_TAG" \
+            --load \
+            .
+          
+          # 추가 태그 생성
+          for tag in "${TAGS[@]:1}"; do
+            ADDITIONAL_TAG="${ECR_REGISTRY}/${ECR_REPOSITORY}:${tag}"
+            echo "Tagging image: $ADDITIONAL_TAG"
+            docker tag "$FIRST_TAG" "$ADDITIONAL_TAG"
+          done
+          
+          # 모든 태그 푸시
+          for tag in "${TAGS[@]}"; do
+            IMAGE_URI="${ECR_REGISTRY}/${ECR_REPOSITORY}:${tag}"
+            echo "Pushing image: $IMAGE_URI"
+            docker push "$IMAGE_URI"
+          done
+          
+          # 출력 설정
+          echo "image=${FIRST_TAG}" >> $GITHUB_OUTPUT
+          echo "full_image_name=${ECR_REGISTRY}/${ECR_REPOSITORY}" >> $GITHUB_OUTPUT
+
+      - name: Image digest
+        run: |
+          echo "✅ Docker 이미지가 성공적으로 ECR에 푸시되었습니다!"
+          echo "Repository: ${{ secrets.ECR_REPOSITORY_NAME }}"
+          echo "Tags: ${{ steps.meta.outputs.tags }}"
+          echo "Branch: ${{ steps.meta.outputs.branch }}"
+          echo "SHA: ${{ steps.meta.outputs.sha }}"
+
+      - name: Logout of Amazon ECR
+        if: always()
+        run: docker logout ${{ steps.login-ecr.outputs.registry }}
+
