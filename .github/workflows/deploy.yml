@@ -10,7 +10,7 @@ on:
       - main
 
 env:
-  AWS_REGION: ${{ vars.AWS_REGION || 'us-west-2' }}  # GitHub Variables에서 가져오기 (기본값: us-west-2)
+  AWS_REGION: ${{ vars.AWS_REGION || 'us-east-2' }}
 
 jobs:
   build-and-push:
