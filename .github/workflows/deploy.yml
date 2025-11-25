@@ -10,7 +10,7 @@ on:
       - main
 
 env:
-  AWS_REGION: ap-northeast-2  # 서울 리전 (필요시 변경)
+  AWS_REGION: ${{ vars.AWS_REGION || 'us-west-2' }}  # GitHub Variables에서 가져오기 (기본값: us-west-2)
 
 jobs:
   build-and-push:
@@ -26,6 +26,7 @@ jobs:
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}  # 임시 자격 증명용 (선택사항)
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Login to Amazon ECR
@@ -58,6 +59,10 @@ jobs:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
           ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY_NAME }}
           IMAGE_TAGS: ${{ steps.meta.outputs.tags }}
+          # 애플리케이션 환경변수 (GitHub Variables/Secrets에서 가져오기)
+          APP_NAME: ${{ vars.APP_NAME || 'My Web App' }}
+          NODE_ENV: ${{ vars.NODE_ENV || 'production' }}
+          APP_PORT: ${{ vars.APP_PORT || '3000' }}
         run: |
           # 태그들을 배열로 변환
           IFS=',' read -ra TAGS <<< "$IMAGE_TAGS"
@@ -66,8 +71,12 @@ jobs:
           FIRST_TAG="${ECR_REGISTRY}/${ECR_REPOSITORY}:${TAGS[0]}"
           echo "Building image: $FIRST_TAG"
           
+          # 환경변수를 build args로 전달
           docker buildx build \
             --platform linux/amd64 \
+            --build-arg APP_NAME="${APP_NAME}" \
+            --build-arg NODE_ENV="${NODE_ENV}" \
+            --build-arg PORT="${APP_PORT}" \
             --tag "$FIRST_TAG" \
             --load \
             .
